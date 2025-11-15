@@ -1,4 +1,4 @@
-# FINSIGHT – Federated Stock Analytics with MySQL + Python
+# FINSIGHT – Federated Stock Analytics with MySQL + Python + LLM
 
 This project demonstrates an Information Integration / Federated Query system over:
 
@@ -6,16 +6,19 @@ This project demonstrates an Information Integration / Federated Query system ov
 * a fundamentals database (`fundamentals_db`) with financial ratios
 * a Python pipeline that:
 
-  * parses a natural-language query
-  * decomposes it into SQL for both databases
+  * **parses natural-language queries using LLM (Ollama with Mistral)**
+  * decomposes queries into SQL for both databases
   * executes and joins the results
-  * optionally generates an LLM-style commentary (stubbed in this repo)
+  * generates LLM-powered commentary on results
 
-The repository you are zipping already contains:
+**NEW**: This system now uses **Ollama with Mistral** for intelligent natural language to SQL conversion, providing more flexible and user-friendly query understanding compared to regex-based parsing.
+
+The repository contains:
 
 * cleaned CSVs (`data/prices.csv`, `data/fundamentals.csv`) that match the database schema
-* all Python source files with complete code
+* all Python source files with complete LLM integration
 * a Docker Compose file to spin up both databases
+* **Ollama integration for natural language query understanding**
 
 ---
 
@@ -48,12 +51,15 @@ FINSIGHT/
 
 Install on your machine:
 
-* Docker Desktop
-* MySQL Workbench
-* Python 3.10+ (3.11/3.12 also fine)
+* **Docker Desktop** - for MySQL databases
+* **MySQL Workbench** - for database management
+* **Python 3.10+** (3.11/3.12 also fine)
+* **Ollama** - for LLM-powered natural language processing (see [OLLAMA_SETUP.md](OLLAMA_SETUP.md))
 * Git / unzip capability (to obtain the project)
 
 All commands below assume the repository root is called `FINSIGHT`.
+
+> **Note**: The system includes automatic fallback to regex-based parsing if Ollama is not available, so you can run the basic system without LLM support. However, for the best experience, installing Ollama is recommended.
 
 ---
 
@@ -302,10 +308,36 @@ Activate:
 ### 7.2 Install Python dependencies
 
 ```bash
-pip install pandas mysql-connector-python python-dateutil
+pip install -r requirements.txt
 ```
 
-These are sufficient for the current code.
+Or manually:
+
+```bash
+pip install pandas mysql-connector-python python-dateutil requests
+```
+
+These packages provide:
+- `pandas` - Data manipulation
+- `mysql-connector-python` - MySQL database connectivity
+- `python-dateutil` - Date parsing
+- `requests` - HTTP client for Ollama API calls
+
+### 7.3 Set up Ollama (Optional but Recommended)
+
+For LLM-powered natural language query understanding:
+
+1. **Install Ollama** - Follow the detailed guide in [OLLAMA_SETUP.md](OLLAMA_SETUP.md)
+2. **Pull Mistral model**:
+   ```bash
+   ollama pull mistral
+   ```
+3. **Verify installation**:
+   ```bash
+   ollama list
+   ```
+
+**Without Ollama**: The system will automatically fall back to regex-based parsing. You'll see a warning message but the system will continue to work.
 
 ---
 
@@ -499,25 +531,39 @@ This is the “results integration” step.
 
 ### 10.6 `llm_client.py`
 
-A stub module that represents the LLM side of the system.
+**LLM integration module** that handles communication with Ollama.
 
 Functions:
 
-* `load_report_text(symbol, fy)`:
+* **NEW** `check_ollama_status() -> bool`:
+  * Checks if Ollama is running and the configured model is available
+  * Used to determine whether to use LLM or fallback parsing
 
+* **NEW** `call_ollama(prompt, temperature, max_tokens) -> str`:
+  * Sends HTTP request to Ollama API
+  * Configured for `mistral` model by default
+  * Uses low temperature (0.1) for SQL generation for more deterministic outputs
+  * Returns the generated response
+
+* `load_report_text(symbol, fy)`:
   * Looks for `data/reports/{SYMBOL}_{FY}.txt` and returns its contents if present.
   * In this zipped project you may not have reports; in that case it returns an empty string.
 
 * `build_llm_prompt(symbol, report_text)`:
-
   * Constructs a natural-language prompt that explains what the LLM should summarize.
 
 * `call_llm(prompt)`:
+  * Wrapper for calling Ollama for general text generation (report summaries)
+  * Uses higher temperature (0.3) for more creative output
+  * Returns placeholder if Ollama is not available
 
-  * Currently returns a placeholder string instead of calling a real model.
-  * This keeps the pipeline working but avoids needing an actual LLM runtime.
+**Configuration**:
+```python
+OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_MODEL = "mistral"  # Can be changed to "llama3.2" or other models
+```
 
-You can later wire this to a local model (e.g., Ollama) or an API if desired.
+See [OLLAMA_SETUP.md](OLLAMA_SETUP.md) for detailed configuration options.
 
 ### 10.7 `main_cli.py`
 
@@ -553,11 +599,20 @@ python main_cli.py
 
 Example queries the system is designed to handle:
 
+**With LLM (Ollama + Mistral)**:
 * `show companies with price growth 20% in 2017 and debt equity < 1 and ROE > 15 and PE < 25`
 * `which stocks had strong price growth last year with low debt equity`
 * `compare price growth and ROE for RELIANCE and HDFCBANK in 2016`
+* `find stocks with good fundamentals in 2017`
+* `show me high growth companies with low PE ratio`
+* `stocks with debt equity below 1.5 and ROE above 12`
 
-The parser is simple rule-based; it does not handle arbitrary English but works for this restricted style.
+**Without LLM (Fallback regex parser)**:
+* Requires more specific phrasing with exact keywords
+* `show companies with price growth 20% in 2017 and debt equity < 1 and ROE > 15`
+* Works but less flexible than LLM mode
+
+The LLM mode provides much better natural language understanding and can handle variations in phrasing.
 
 ---
 
@@ -580,29 +635,137 @@ The parser is simple rule-based; it does not handle arbitrary English but works 
    ```bash
    cd FINSIGHT
    .venv\Scripts\Activate.ps1     # or activate.bat / source .venv/bin/activate
-   pip install pandas mysql-connector-python python-dateutil
+   pip install -r requirements.txt
    ```
 
-4. Test DB connections:
+4. **(Optional but Recommended)** Set up Ollama:
+
+   ```bash
+   # Install Ollama from https://ollama.ai
+   ollama pull mistral
+   ollama list  # Verify installation
+   ```
+
+   See detailed instructions in [OLLAMA_SETUP.md](OLLAMA_SETUP.md)
+
+5. Test DB connections:
 
    ```bash
    cd src
    python db_utils.py
    ```
 
-5. Run a federated query test:
+6. Run a federated query test:
 
    ```bash
    python federator.py
    ```
 
-6. Run the interactive CLI:
+7. Run the interactive CLI:
 
    ```bash
    python main_cli.py
    ```
 
-7. Type a query, observe the integrated output.
+   If Ollama is running, you'll see:
+   ```
+   Finsight CLI – type a query (or 'q' to quit).
+   >
+   ```
+
+   If Ollama is not available, you'll see:
+   ```
+   Warning: Ollama not available, using fallback regex parser
+   ```
+
+8. Type a query, observe the integrated output.
+
+Example session:
+```
+> show companies with price growth 20% in 2017 and ROE > 15
+
+Analyzing and decomposing query...
+
+Executing and integrating results...
+
+======================================
+Symbol        : TCS
+Price growth  : 25.34% (from 2250.50 to 2820.75)
+ROE           : 18.50
+Debt/Equity   : 0.15
+P/E           : 22.30
+Current Ratio : 2.45
+Market Cap    : 850000000000
+
+LLM commentary:
+[Generated summary based on fundamentals...]
+```
+
+---
+
+## 12. Architecture Overview
+
+### Data Flow
+
+```
+User Query (Natural Language)
+         ↓
+    Analyzer (with LLM)
+         ↓
+    Query Plan (parsed parameters)
+         ↓
+    SQL Builder (generates queries)
+         ↓
+    Federator (executes on both DBs)
+         ↓
+    Integrator (joins & filters results)
+         ↓
+    Output (with LLM commentary)
+```
+
+### LLM Integration Benefits
+
+1. **Natural Language Understanding**: More flexible query interpretation
+2. **User-Friendly**: No need to learn specific syntax
+3. **Extensible**: Easy to add new query patterns
+4. **Robust**: Automatic fallback ensures system always works
+5. **Context-Aware**: Better handling of ambiguous queries
+
+---
+
+## 13. Troubleshooting
+
+### LLM Issues
+
+**"Ollama not available"**:
+- Install Ollama from https://ollama.ai
+- Ensure Ollama service is running
+- Pull the Mistral model: `ollama pull mistral`
+
+**Slow LLM responses**:
+- Consider using a smaller model like `llama3.2`
+- Increase timeout in `llm_client.py`
+- Check system resources (8GB+ RAM recommended)
+
+### Database Issues
+
+**Connection refused**:
+- Ensure Docker containers are running: `docker ps`
+- Check ports 3307 and 3308 are not in use
+- Verify credentials in `src/config.py`
+
+**No data returned**:
+- Verify CSVs were imported correctly
+- Run test queries in MySQL Workbench
+- Check for authentication plugin errors (see docker-compose.yml for fix)
+
+---
+
+## 14. Additional Resources
+
+- **[OLLAMA_SETUP.md](OLLAMA_SETUP.md)** - Comprehensive Ollama installation and configuration guide
+- **requirements.txt** - Python package dependencies
+- **db/docker-compose.yml** - Database container configuration
 
 ---
 

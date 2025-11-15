@@ -2,8 +2,58 @@
 
 import os
 import textwrap
+import json
+import requests
+from typing import Optional, Dict, Any
 
 REPORT_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "reports")
+
+# Ollama configuration
+OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_MODEL = "mistral"  # or "llama3.2" - mistral is better for SQL generation
+
+
+def check_ollama_status() -> bool:
+    """Check if Ollama is running and the model is available."""
+    try:
+        response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
+        if response.status_code == 200:
+            models = response.json().get("models", [])
+            model_names = [m["name"] for m in models]
+            # Check for exact match or partial match (e.g., "mistral:latest")
+            return any(OLLAMA_MODEL in name for name in model_names)
+        return False
+    except Exception as e:
+        print(f"Warning: Could not connect to Ollama: {e}")
+        return False
+
+
+def call_ollama(prompt: str, temperature: float = 0.1, max_tokens: int = 2000) -> str:
+    """
+    Call Ollama API with the given prompt.
+    Lower temperature for more deterministic SQL generation.
+    """
+    try:
+        url = f"{OLLAMA_BASE_URL}/api/generate"
+        payload = {
+            "model": OLLAMA_MODEL,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+            },
+        }
+
+        response = requests.post(url, json=payload, timeout=60)
+        response.raise_for_status()
+
+        result = response.json()
+        return result.get("response", "").strip()
+
+    except Exception as e:
+        print(f"Error calling Ollama: {e}")
+        return f"Error: Could not generate response - {str(e)}"
 
 
 def load_report_text(symbol: str, fy: int) -> str:
@@ -39,8 +89,9 @@ def build_llm_prompt(symbol: str, report_text: str) -> str:
 
 def call_llm(prompt: str) -> str:
     """
-    Placeholder. For the assignment demo you can print/return the prompt
-    instead of actually calling a model.
+    Call the LLM for general text generation (report summaries, etc.).
     """
-    # For now just return the first 200 characters so the pipeline works.
-    return "LLM summary placeholder based on prompt: " + prompt[:200]
+    if not check_ollama_status():
+        return "LLM summary unavailable - Ollama not running or model not found."
+
+    return call_ollama(prompt, temperature=0.3)
