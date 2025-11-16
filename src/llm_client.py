@@ -79,7 +79,7 @@ def build_llm_prompt(symbol: str, report_text: str) -> str:
 
     TASK:
       - Summarize management's view on growth, risks, and capital structure
-      - Keep it to 3–5 concise bullet points.
+      - Keep it to 3-5 concise bullet points.
 
     REPORT TEXT:
     {report_text[:6000]}

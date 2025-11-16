@@ -35,55 +35,88 @@ class QueryPlan:
     sql_fund: Optional[str] = None
 
 
-# ------------ LLM-based query analyzer ------------
+# ------------ LLM-based SQL query generator ------------
 
 
 def build_nl_to_sql_prompt(nl_query: str) -> str:
     """
-    Build a comprehensive prompt for the LLM to convert natural language to query parameters.
+    Build a comprehensive prompt for the LLM to convert natural language directly to SQL queries.
     """
-    prompt = f"""You are a financial data query analyzer. Convert the following natural language query into structured parameters for querying stock market databases.
+    prompt = f"""You are a SQL query generator for financial databases. Convert the following natural language query into TWO SQL queries.
 
 DATABASE SCHEMA:
-1. prices table: (symbol, trade_date, close_price)
-2. fundamentals table: (symbol, fy, roe, debt_equity_ratio, current_ratio, pe_ratio, pb_ratio, market_cap)
+1. prices table: 
+   - symbol VARCHAR (stock ticker symbol)
+   - trade_date DATE
+   - close_price DECIMAL
+   NOTE: This table does NOT contain volume, open_price, high, or low data.
+
+2. fundamentals table:
+   - symbol VARCHAR (stock ticker symbol)
+   - fy INT (fiscal year: 2016 or 2017 ONLY)
+   - roe DECIMAL (Return on Equity)
+   - debt_equity_ratio DECIMAL
+   - current_ratio DECIMAL
+   - pe_ratio DECIMAL (Price to Earnings)
+   - pb_ratio DECIMAL (Price to Book)
+   - market_cap BIGINT
 
 AVAILABLE SYMBOLS: {', '.join(ALL_SYMBOLS)}
+AVAILABLE DATA RANGE: 2016-01-01 to 2017-12-31 ONLY
 
 USER QUERY: "{nl_query}"
 
-TASK: Extract the following parameters from the query. If a parameter is not mentioned, use null.
+IMPORTANT: If the query asks for:
+- Data outside 2016-2017 range (like 2025, 2020, etc.)
+- Volume/trading volume data (not available)
+- Fields not in the schema
+
+Then set "data_unavailable" to true and provide a helpful message.
 
 Return ONLY a valid JSON object with these exact fields:
 {{
-  "start_date": "YYYY-MM-DD format or null",
-  "end_date": "YYYY-MM-DD format or null",
+  "sql_price": "SELECT ... FROM prices ..." or null,
+  "sql_fund": "SELECT ... FROM fundamentals ..." or null,
+  "start_date": "YYYY-MM-DD",
+  "end_date": "YYYY-MM-DD",
   "symbols": ["SYMBOL1", "SYMBOL2"] or null,
-  "min_price_growth": 0.20 (as decimal, e.g., 20% = 0.20) or null,
+  "min_price_growth": 0.20 or null,
   "max_debt_equity": 1.0 or null,
   "min_roe": 15.0 or null,
   "max_pe": 25.0 or null,
-  "fy": 2016 or 2017 or null
+  "fy": 2016 or 2017 or null,
+  "data_unavailable": false,
+  "unavailable_message": "explanation if data_unavailable is true"
 }}
 
-RULES:
-- Dates: If year mentioned (e.g., "2017"), use "2017-01-01" to "2017-12-31"
-- If "last year" or "past year", use 2017-01-01 to 2017-12-31
-- Default date range if not specified: 2016-01-01 to 2017-12-31
-- Price growth: Convert percentage to decimal (20% → 0.20)
-- Symbols: Extract only from available symbols list, use uppercase
-- Financial year (fy): Extract year if mentioned (2016 or 2017)
-- Thresholds: Extract numeric values for debt-equity, ROE, PE ratios
+RULES FOR SQL GENERATION:
+1. sql_price should:
+   - Calculate price_growth: (MAX(close_price) - MIN(close_price)) / MIN(close_price)
+   - Filter by date range (use BETWEEN, but constrain to 2016-2017)
+   - Filter by symbols if specified (use IN clause)
+   - GROUP BY symbol
+   - Return: symbol, start_price, end_price, price_growth
+
+2. sql_fund should:
+   - Filter by fiscal year (fy) if specified
+   - If no fy specified, use: fy IN (2016, 2017)
+   - Return all columns: symbol, fy, roe, debt_equity_ratio, current_ratio, pe_ratio, pb_ratio, market_cap
+
+3. General rules:
+   - Use proper SQL syntax for MySQL
+   - Dates: Constrain all queries to 2016-01-01 through 2017-12-31
+   - Price growth: Convert percentage to decimal (20% → 0.20)
+   - Symbols: Use only from available symbols list, uppercase
 
 Return ONLY the JSON object, no explanations or additional text."""
 
     return prompt
 
 
-def parse_llm_response(llm_response: str) -> dict:
+def parse_llm_sql_response(llm_response: str) -> dict:
     """
-    Parse the LLM's JSON response and extract query parameters.
-    Falls back to regex parsing if JSON parsing fails.
+    Parse the LLM's JSON response containing SQL queries and parameters.
+    Returns parsed dictionary or empty dict on failure.
     """
     try:
         # Try to find JSON in the response
@@ -93,27 +126,53 @@ def parse_llm_response(llm_response: str) -> dict:
         if json_start != -1 and json_end > json_start:
             json_str = llm_response[json_start:json_end]
             parsed = json.loads(json_str)
+
+            # Validate that required SQL fields exist
+            if "sql_price" not in parsed or "sql_fund" not in parsed:
+                raise ValueError("Missing required SQL fields in response")
+
             return parsed
         else:
             raise ValueError("No JSON found in response")
 
     except (json.JSONDecodeError, ValueError) as e:
-        print(f"Warning: Could not parse LLM JSON response: {e}")
+        print(f"Warning: Could not parse LLM SQL response: {e}")
         print(f"LLM Response: {llm_response}")
         # Return empty dict to trigger fallback
         return {}
 
 
+def validate_sql_query(sql: str) -> bool:
+    """
+    Basic SQL validation to ensure the query is safe and well-formed.
+    """
+    if not sql or not isinstance(sql, str):
+        return False
+
+    sql_lower = sql.lower().strip()
+
+    # Must contain SELECT and FROM
+    if "select" not in sql_lower or "from" not in sql_lower:
+        return False
+
+    # Shouldn't contain dangerous operations
+    dangerous = ["drop", "delete", "insert", "update", "truncate", "alter", "create"]
+    if any(keyword in sql_lower for keyword in dangerous):
+        return False
+
+    return True
+
+
 def analyze_query_with_llm(nl_query: str) -> QueryPlan:
     """
-    Use LLM to analyze the natural language query and extract parameters.
-    Falls back to regex-based parsing if LLM is unavailable.
+    Use LLM to analyze the natural language query and generate SQL queries directly.
+    Falls back to manual SQL generation if LLM is unavailable or fails.
     """
     from llm_client import call_ollama, check_ollama_status
 
     # Check if Ollama is available
     if not check_ollama_status():
-        print("Warning: Ollama not available, using fallback regex parser")
+        print("Warning: Ollama not available, using fallback manual SQL generation")
         return analyze_query_fallback(nl_query)
 
     # Build prompt and call LLM
@@ -121,11 +180,32 @@ def analyze_query_with_llm(nl_query: str) -> QueryPlan:
     llm_response = call_ollama(prompt, temperature=0.1)
 
     # Parse LLM response
-    parsed = parse_llm_response(llm_response)
+    parsed = parse_llm_sql_response(llm_response)
 
     # If parsing failed, use fallback
     if not parsed:
-        print("Warning: LLM parsing failed, using fallback regex parser")
+        print("Warning: LLM SQL generation failed, using fallback manual method")
+        return analyze_query_fallback(nl_query)
+
+    # Check if data is unavailable
+    if parsed.get("data_unavailable", False):
+        msg = parsed.get(
+            "unavailable_message", "Requested data is not available in the database."
+        )
+        print(f"\n⚠️  {msg}")
+        print("ℹ️  Available data: 2016-2017, stocks: RELIANCE, HDFCBANK, TCS, etc.")
+        print("ℹ️  Available fields: close_price (no volume data)")
+        # Still try to show what we can with fallback
+        return analyze_query_fallback(nl_query)
+
+    # Validate generated SQL queries
+    sql_price = parsed.get("sql_price", "")
+    sql_fund = parsed.get("sql_fund", "")
+
+    if not validate_sql_query(sql_price) or not validate_sql_query(sql_fund):
+        print(
+            "Warning: Generated SQL queries are invalid, using fallback manual method"
+        )
         return analyze_query_fallback(nl_query)
 
     # Convert parsed data to QueryPlan
@@ -141,7 +221,7 @@ def analyze_query_with_llm(nl_query: str) -> QueryPlan:
             else date(2017, 12, 31)
         )
 
-        return QueryPlan(
+        plan = QueryPlan(
             start_date=start_date,
             end_date=end_date,
             symbols=parsed.get("symbols"),
@@ -151,6 +231,14 @@ def analyze_query_with_llm(nl_query: str) -> QueryPlan:
             max_pe=parsed.get("max_pe"),
             fy=parsed.get("fy"),
         )
+
+        # Directly assign the LLM-generated SQL queries
+        plan.sql_price = sql_price
+        plan.sql_fund = sql_fund
+
+        print("✓ Successfully generated SQL queries using LLM")
+        return plan
+
     except (KeyError, ValueError, TypeError) as e:
         print(f"Warning: Error converting LLM output to QueryPlan: {e}")
         return analyze_query_fallback(nl_query)
@@ -239,6 +327,19 @@ def analyze_query(nl_query: str) -> QueryPlan:
 
 
 def build_sql(plan: QueryPlan) -> QueryPlan:
+    """
+    Build SQL queries for the QueryPlan.
+    If SQL queries are already set (from LLM), skip generation.
+    Otherwise, use the manual method to generate SQL.
+    """
+    # Check if SQL queries are already generated by LLM
+    if plan.sql_price and plan.sql_fund:
+        print("Using LLM-generated SQL queries")
+        return plan
+
+    print("Using manual SQL generation method")
+
+    # Manual SQL generation (fallback method)
     # price query
     where_symbols = ""
     if plan.symbols:
@@ -286,8 +387,15 @@ def build_sql(plan: QueryPlan) -> QueryPlan:
 def analyze_and_decompose(nl_query: str) -> QueryPlan:
     """
     High-level entry point used by federator:
-      1) analyze NL query
-      2) build concrete SQL sub-queries
+      1) Try to use LLM to analyze NL query and generate SQL directly
+      2) If LLM fails or is unavailable, use fallback regex parser
+      3) If SQL not generated by LLM, build SQL manually using build_sql()
+
+    The flow is:
+      - analyze_query_with_llm() tries LLM first (generates SQL + parameters)
+      - If LLM succeeds, plan.sql_price and plan.sql_fund are already set
+      - If LLM fails, analyze_query_fallback() extracts parameters only
+      - build_sql() checks if SQL already exists, generates manually if not
     """
     plan = analyze_query(nl_query)
     plan = build_sql(plan)
