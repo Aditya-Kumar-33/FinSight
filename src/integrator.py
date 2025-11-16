@@ -17,32 +17,57 @@ def generate_result_summary(
     """
     Use LLM to generate a concise, relevant summary of the query results.
     """
-    if not check_ollama_status() or not results:
+    if not check_ollama_status():
         return ""
 
-    # Build a concise data summary
+    if not results:
+        return "No companies matched the specified criteria."
+
+    # Build a concise data summary with actual values
     data_summary = []
     for r in results[:5]:  # Limit to first 5 results
         data_summary.append(
-            f"- {r['symbol']}: Price growth {r['price_growth']*100:.1f}%, "
-            f"ROE {r['roe']:.1f}%, D/E {r['debt_equity_ratio']:.2f}, "
-            f"P/E {r['pe_ratio']:.1f}"
+            f"- {r['symbol']}: Price grew {r['price_growth']*100:.1f}% "
+            f"(from ₹{r['start_price']:.2f} to ₹{r['end_price']:.2f}), "
+            f"ROE={r['roe']:.1f}%, D/E={r['debt_equity_ratio']:.2f}, P/E={r['pe_ratio']:.1f}"
         )
 
-    prompt = f"""You are a financial analyst assistant. The user asked: "{nl_query}"
+    prompt = f"""You are a financial data assistant. Answer ONLY based on the data provided below.
 
-Based on the available data (2016-2017), here are the results:
+USER QUERY: "{nl_query}"
+
+IMPORTANT FACTS:
+- Database contains data ONLY for years 2012-2022
+- Database contains ONLY close_price (NO volume/trading volume data)
+- Available stocks: RELIANCE, HDFCBANK, TCS, INFY, etc.
+
+ACTUAL QUERY RESULTS ({len(results)} {'company' if len(results) == 1 else 'companies'}):
 {chr(10).join(data_summary)}
 
-TASK: Provide a brief, relevant 2-3 sentence summary that:
-1. Acknowledges if the query asks for data outside the available range (we only have 2016-2017)
-2. Highlights key findings from the actual results
-3. Keeps it concise and directly answers what the user asked
+Date range queried: {plan.start_date} to {plan.end_date}
 
-Do NOT provide generic information or boilerplate. Be specific to this query and these results."""
+INSTRUCTIONS:
+1. Write 2-3 sentences summarizing ONLY the data shown above
+2. If user asked for data outside 2012-2022 or asked for volume, acknowledge this limitation
+3. Use EXACT numbers from the results above - DO NOT make up or approximate values
+4. We have data from 2012-2022 only - do NOT mention any other date range
+5. Be factual and specific - no generic statements
+
+CORRECT example: "For the query about RELIANCE in 2017, the stock showed 114.2% price growth from ₹196.43 to ₹420.77, with ROE of 0.12% and debt-equity ratio of 0.75."
+
+WRONG example: "I'm sorry but data only covers 2012-2022..." (NEVER say this!)
+
+Write your response now:"""
 
     try:
-        summary = call_ollama(prompt, temperature=0.3, max_tokens=300)
+        summary = call_ollama(prompt, temperature=0.1, max_tokens=200)
+
+        # Quick sanity check - if LLM mentions wrong years, return empty
+        summary_lower = summary.lower()
+        if any(year in summary_lower for year in ["2010", "2011", "2023", "2024"]):
+            print("⚠️  LLM hallucinated incorrect years - suppressing summary")
+            return ""
+
         return summary.strip()
     except Exception as e:
         print(f"Warning: Could not generate LLM summary: {e}")

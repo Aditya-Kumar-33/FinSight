@@ -12,8 +12,19 @@ def run_federated_query(nl_query: str) -> tuple[QueryPlan, pd.DataFrame, pd.Data
     assert plan.sql_price is not None, "sql_price was not generated"
     assert plan.sql_fund is not None, "sql_fund was not generated"
 
-    df_price = query_price_db(plan.sql_price)
-    df_fund = query_fund_db(plan.sql_fund)
+    try:
+        df_price = query_price_db(plan.sql_price)
+    except Exception as e:
+        print(f"\n❌ Error executing price query: {e}")
+        print(f"SQL was: {plan.sql_price}")
+        raise
+
+    try:
+        df_fund = query_fund_db(plan.sql_fund)
+    except Exception as e:
+        print(f"\n❌ Error executing fundamentals query: {e}")
+        print(f"SQL was: {plan.sql_fund}")
+        raise
 
     return plan, df_price, df_fund
 

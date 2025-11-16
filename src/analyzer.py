@@ -42,73 +42,91 @@ def build_nl_to_sql_prompt(nl_query: str) -> str:
     """
     Build a comprehensive prompt for the LLM to convert natural language directly to SQL queries.
     """
-    prompt = f"""You are a SQL query generator for financial databases. Convert the following natural language query into TWO SQL queries.
+    prompt = f"""You are a SQL query generator for financial databases. Convert the following natural language query into TWO SEPARATE SQL queries.
+IMPORTANT: DO NOT INVENT numeric metric values. If the user requests a metric that doesn't exist in the schema (for example 'ROI' when only 'roe' exists), do NOT fabricate an answer — return SQL and parameter fields only, and set data_unavailable where appropriate.
 
 DATABASE SCHEMA:
-1. prices table: 
+1. prices table (ONLY price data):
    - symbol VARCHAR (stock ticker symbol)
    - trade_date DATE
    - close_price DECIMAL
-   NOTE: This table does NOT contain volume, open_price, high, or low data.
+   NOTE: NO fundamental metrics here (no ROE, debt_equity_ratio, PE, etc.)
 
-2. fundamentals table:
+2. fundamentals table (ONLY fundamental metrics):
    - symbol VARCHAR (stock ticker symbol)
-   - fy INT (fiscal year: 2016 or 2017 ONLY)
+   - fy INT (fiscal year: 2012 to 2022 ONLY)
    - roe DECIMAL (Return on Equity)
    - debt_equity_ratio DECIMAL
    - current_ratio DECIMAL
    - pe_ratio DECIMAL (Price to Earnings)
    - pb_ratio DECIMAL (Price to Book)
    - market_cap BIGINT
+   NOTE: NO price data here
 
 AVAILABLE SYMBOLS: {', '.join(ALL_SYMBOLS)}
-AVAILABLE DATA RANGE: 2016-01-01 to 2017-12-31 ONLY
+AVAILABLE DATA RANGE: 2012-01-01 to 2022-12-31 ONLY
 
 USER QUERY: "{nl_query}"
 
-IMPORTANT: If the query asks for:
-- Data outside 2016-2017 range (like 2025, 2020, etc.)
-- Volume/trading volume data (not available)
-- Fields not in the schema
+CRITICAL RULES - READ CAREFULLY:
+- If the user requests data outside 2012-01-01 to 2022-12-31, do NOT hallucinate — set data_unavailable = true in your JSON and provide a clear unavailable message.
+- If the user requests a metric not present in the schema (e.g., \"ROI\"), do NOT invent numeric values. Indicate the requested metric in the JSON (requested_metric) so the caller can decide how to proceed (map, approximate, or refuse).
+- Return ONLY a single valid JSON object (no extra text). The JSON must contain the two SQL strings and the extracted parameters as described below.
 
-Then set "data_unavailable" to true and provide a helpful message.
+**sql_price query:**
+- Query ONLY the prices table
+- NEVER filter by fundamental metrics (ROE, debt_equity, PE, etc.) - those are in a different table!
+- Calculate: (MAX(close_price) - MIN(close_price)) / MIN(close_price) AS price_growth
+- Filter by: date range (BETWEEN), symbols (IN clause if specified)
+- GROUP BY symbol
+- SELECT: symbol, MIN(close_price) AS start_price, MAX(close_price) AS end_price, price_growth
+- DO NOT use HAVING clause for fundamentals - they don't exist in prices table!
 
-Return ONLY a valid JSON object with these exact fields:
+**sql_fund query:**
+- Query ONLY the fundamentals table
+- Filter by: fiscal year (fy), optionally by symbol
+- If no fy specified, use: WHERE fy IN (2012, 2022)
+- SELECT all columns: symbol, fy, roe, debt_equity_ratio, current_ratio, pe_ratio, pb_ratio, market_cap
+- DO NOT try to filter by price_growth - that's in a different table!
+
+**Parameter extraction:**
+- Extract thresholds but DON'T put them in SQL - the Python code will apply them after joining tables
+- min_price_growth: from "X% growth", "growth > X%", etc. (as decimal: 20% = 0.20)
+- max_debt_equity: from "debt-equity < X", "DE < X", etc.
+- min_roe: from "ROE > X", "ROE ≥ X%", etc.
+- max_pe: from "PE < X", "P/E < X", etc.
+- fy: from "2012", "2022", "last year" (→2022), "FY 2012", etc.
+- symbols: extract from AVAILABLE SYMBOLS list only
+
+Return ONLY a valid JSON object:
 {{
-  "sql_price": "SELECT ... FROM prices ..." or null,
-  "sql_fund": "SELECT ... FROM fundamentals ..." or null,
+  "sql_price": "SELECT symbol, MIN(close_price) AS start_price, MAX(close_price) AS end_price, (MAX(close_price) - MIN(close_price)) / MIN(close_price) AS price_growth FROM prices WHERE trade_date BETWEEN '...' AND '...' [AND symbol IN (...)] GROUP BY symbol",
+  "sql_fund": "SELECT symbol, fy, roe, debt_equity_ratio, current_ratio, pe_ratio, pb_ratio, market_cap FROM fundamentals WHERE fy IN (...) [AND symbol IN (...)]",
   "start_date": "YYYY-MM-DD",
   "end_date": "YYYY-MM-DD",
-  "symbols": ["SYMBOL1", "SYMBOL2"] or null,
+  "symbols": ["SYMBOL1"] or null,
   "min_price_growth": 0.20 or null,
   "max_debt_equity": 1.0 or null,
   "min_roe": 15.0 or null,
   "max_pe": 25.0 or null,
-  "fy": 2016 or 2017 or null,
+  "fy": 2012 or 2022 or null,
   "data_unavailable": false,
-  "unavailable_message": "explanation if data_unavailable is true"
+  "unavailable_message": "..." or null
 }}
 
-RULES FOR SQL GENERATION:
-1. sql_price should:
-   - Calculate price_growth: (MAX(close_price) - MIN(close_price)) / MIN(close_price)
-   - Filter by date range (use BETWEEN, but constrain to 2016-2017)
-   - Filter by symbols if specified (use IN clause)
-   - GROUP BY symbol
-   - Return: symbol, start_price, end_price, price_growth
+EXAMPLES:
+Query: "stocks with 20% growth in 2022 and debt-equity < 1"
+- sql_price: WHERE trade_date BETWEEN '2022-01-01' AND '2022-12-31' (NO debt-equity filter here!)
+- sql_fund: WHERE fy = 2022 (NO growth filter here!)
+- min_price_growth: 0.20 (Python will filter)
+- max_debt_equity: 1.0 (Python will filter)
 
-2. sql_fund should:
-   - Filter by fiscal year (fy) if specified
-   - If no fy specified, use: fy IN (2016, 2017)
-   - Return all columns: symbol, fy, roe, debt_equity_ratio, current_ratio, pe_ratio, pb_ratio, market_cap
+Query: "Show TCS and INFY growth in 2012"
+- sql_price: WHERE trade_date BETWEEN '2012-01-01' AND '2012-12-31' AND symbol IN ('TCS', 'INFY')
+- sql_fund: WHERE fy = 2012 AND symbol IN ('TCS', 'INFY')
+- symbols: ["TCS", "INFY"]
 
-3. General rules:
-   - Use proper SQL syntax for MySQL
-   - Dates: Constrain all queries to 2016-01-01 through 2017-12-31
-   - Price growth: Convert percentage to decimal (20% → 0.20)
-   - Symbols: Use only from available symbols list, uppercase
-
-Return ONLY the JSON object, no explanations or additional text."""
+Return ONLY the JSON, no extra text."""
 
     return prompt
 
@@ -142,9 +160,10 @@ def parse_llm_sql_response(llm_response: str) -> dict:
         return {}
 
 
-def validate_sql_query(sql: str) -> bool:
+def validate_sql_query(sql: str, query_type: str = "price") -> bool:
     """
     Basic SQL validation to ensure the query is safe and well-formed.
+    Also checks that fundamental fields aren't in price queries and vice versa.
     """
     if not sql or not isinstance(sql, str):
         return False
@@ -159,6 +178,53 @@ def validate_sql_query(sql: str) -> bool:
     dangerous = ["drop", "delete", "insert", "update", "truncate", "alter", "create"]
     if any(keyword in sql_lower for keyword in dangerous):
         return False
+
+    # Check table separation
+    if query_type == "price":
+        # Price queries should query 'prices' table
+        if "from prices" not in sql_lower:
+            print(f"Warning: Price query should use 'FROM prices' table")
+            return False
+
+        # Price queries should NOT filter by fundamental fields
+        fundamental_fields = [
+            "roe",
+            "debt_equity",
+            "pe_ratio",
+            "pb_ratio",
+            "current_ratio",
+            "market_cap",
+        ]
+        for field in fundamental_fields:
+            if field in sql_lower:
+                print(
+                    f"Warning: Price query contains fundamental field '{field}' - these belong in fundamentals table!"
+                )
+                return False
+
+    elif query_type == "fund":
+        # Fundamentals queries should query 'fundamentals' table
+        if "from fundamentals" not in sql_lower:
+            print(f"Warning: Fundamentals query should use 'FROM fundamentals' table")
+            return False
+
+        # Fundamentals queries should NOT filter by price fields
+        price_fields = [
+            "close_price",
+            "trade_date",
+            "price_growth",
+            "start_price",
+            "end_price",
+        ]
+        for field in price_fields:
+            if field in sql_lower and field not in [
+                "start_date",
+                "end_date",
+            ]:  # Allow date params
+                print(
+                    f"Warning: Fundamentals query contains price field '{field}' - these belong in prices table!"
+                )
+                return False
 
     return True
 
@@ -193,7 +259,7 @@ def analyze_query_with_llm(nl_query: str) -> QueryPlan:
             "unavailable_message", "Requested data is not available in the database."
         )
         print(f"\n⚠️  {msg}")
-        print("ℹ️  Available data: 2016-2017, stocks: RELIANCE, HDFCBANK, TCS, etc.")
+        print("ℹ️  Available data: 2012-2022, stocks: RELIANCE, HDFCBANK, TCS, etc.")
         print("ℹ️  Available fields: close_price (no volume data)")
         # Still try to show what we can with fallback
         return analyze_query_fallback(nl_query)
@@ -202,7 +268,9 @@ def analyze_query_with_llm(nl_query: str) -> QueryPlan:
     sql_price = parsed.get("sql_price", "")
     sql_fund = parsed.get("sql_fund", "")
 
-    if not validate_sql_query(sql_price) or not validate_sql_query(sql_fund):
+    if not validate_sql_query(sql_price, "price") or not validate_sql_query(
+        sql_fund, "fund"
+    ):
         print(
             "Warning: Generated SQL queries are invalid, using fallback manual method"
         )
@@ -213,12 +281,12 @@ def analyze_query_with_llm(nl_query: str) -> QueryPlan:
         start_date = (
             date.fromisoformat(parsed["start_date"])
             if parsed.get("start_date")
-            else date(2016, 1, 1)
+            else date(2012, 1, 1)
         )
         end_date = (
             date.fromisoformat(parsed["end_date"])
             if parsed.get("end_date")
-            else date(2017, 12, 31)
+            else date(2022, 12, 31)
         )
 
         plan = QueryPlan(
@@ -250,18 +318,18 @@ def analyze_query_with_llm(nl_query: str) -> QueryPlan:
 def _parse_time_window(text: str) -> Tuple[date, date, Optional[int]]:
     t = text.lower()
 
-    if "2016" in t:
-        return date(2016, 1, 1), date(2016, 12, 31), 2016
-    if "2017" in t:
-        return date(2017, 1, 1), date(2017, 12, 31), 2017
+    if "2012" in t:
+        return date(2012, 1, 1), date(2012, 12, 31), 2012
+    if "2022" in t:
+        return date(2022, 1, 1), date(2022, 12, 31), 2022
 
     if "last year" in t or "past year" in t:
-        end = date(2017, 12, 31)
+        end = date(2022, 12, 31)
         start = end - relativedelta(years=1)
-        return start, end, 2017
+        return start, end, 2022
 
     # default to full window of our data
-    return date(2016, 1, 1), date(2017, 12, 31), None
+    return date(2012, 1, 1), date(2022, 12, 31), None
 
 
 def _parse_thresholds(text: str):
@@ -362,7 +430,7 @@ def build_sql(plan: QueryPlan) -> QueryPlan:
     if plan.fy is not None:
         fy_filter = f"AND fy = {plan.fy}"
     else:
-        fy_filter = "AND fy IN (2016, 2017)"
+        fy_filter = "AND fy IN (2012, 2022)"
 
     sql_fund = f"""
         SELECT
@@ -403,7 +471,7 @@ def analyze_and_decompose(nl_query: str) -> QueryPlan:
 
 
 if __name__ == "__main__":
-    q = "show companies with price growth 20% in 2017 and debt equity < 1 and ROE > 15 and PE < 25"
+    q = "show companies with price growth 20% in 2022 and debt equity < 1 and ROE > 15 and PE < 25"
     plan = analyze_and_decompose(q)
     print(plan)
     print("\nSQL price:\n", plan.sql_price)
