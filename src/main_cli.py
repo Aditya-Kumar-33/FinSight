@@ -7,15 +7,15 @@ from integrator import integrate
 def format_result_output(results, llm_summary, nl_query):
     """Format the output based on query results."""
     if not results:
-        print("\n❌ No companies matched your criteria.")
+        print("\nNo companies matched your criteria.")
         if llm_summary:
-            print(f"\n💡 Note: {llm_summary}")
+            print(f"\nNote: {llm_summary}")
         return
 
     # Display summary first if available
     if llm_summary:
         print("\n" + "=" * 70)
-        print("📊 SUMMARY")
+        print("SUMMARY")
         print("=" * 70)
         print(llm_summary)
         print()
@@ -23,7 +23,7 @@ def format_result_output(results, llm_summary, nl_query):
     # Display detailed results
     print("\n" + "=" * 70)
     print(
-        f"📈 DETAILED RESULTS ({len(results)} {'company' if len(results) == 1 else 'companies'} found)"
+        f"DETAILED RESULTS ({len(results)} {'company' if len(results) == 1 else 'companies'} found)"
     )
     print("=" * 70)
 
@@ -56,34 +56,34 @@ def format_result_output(results, llm_summary, nl_query):
 
 def main():
     print("=" * 70)
-    print("🔍 FinSight CLI - Intelligent Financial Data Query System")
+    print("FinSight CLI - Intelligent Financial Data Query System")
     print("=" * 70)
     print("\nType your financial query in natural language (or 'q' to quit).")
     print("Example: 'Show companies with 20% price growth in 2017'")
     print()
 
     while True:
-        nl_query = input("💬 > ").strip()
+        nl_query = input("> ").strip()
 
         if not nl_query:
             continue
 
         if nl_query.lower() in {"q", "quit", "exit"}:
-            print("\n👋 Goodbye!")
+            print("\nGoodbye!")
             break
 
-        print("\n⚙️  Analyzing query and generating SQL...")
+        print("\nAnalyzing query and generating SQL...")
         try:
             plan, df_price, df_fund = run_federated_query(nl_query)
         except Exception as e:
-            print(f"\n❌ Error executing query: {e}")
+            print(f"\nError executing query: {e}")
             continue
 
-        print("⚙️  Integrating results...")
+        print("Integrating results...")
         try:
             results, llm_summary = integrate(plan, df_price, df_fund, nl_query)
         except Exception as e:
-            print(f"\n❌ Error processing results: {e}")
+            print(f"\nError processing results: {e}")
             import traceback
 
             traceback.print_exc()
