@@ -1,0 +1,158 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>FinSight – NL Financial Query</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f5f7fb; color: #1c1c1c; }
+    .container { max-width: 1000px; margin: 0 auto; padding: 24px; }
+    h1 { margin: 0 0 8px; }
+    .card { background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-top: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+    textarea { width: 100%; min-height: 90px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; resize: vertical; }
+    button { padding: 10px 16px; background: #2563eb; color: white; border: none; border-radius: 6px; cursor: pointer; }
+    button:disabled { background: #93c5fd; cursor: not-allowed; }
+    .error { color: #b91c1c; margin-top: 8px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid #e5e7eb; text-align: left; font-size: 14px; }
+    th { background: #f3f4f6; }
+    .muted { color: #6b7280; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React & Babel (CDN) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState } = React;
+
+    function App() {
+      const [nlQuery, setNlQuery] = useState("");
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState("");
+      const [data, setData] = useState(null);
+
+      const runQuery = async () => {
+        if (!nlQuery.trim()) {
+          setError("Please enter a query.");
+          return;
+        }
+        setError("");
+        setLoading(true);
+        setData(null);
+        try {
+          const res = await fetch("/api/query", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ nl_query: nlQuery }),
+          });
+          const text = await res.text();
+          const json = text ? JSON.parse(text) : {};
+          if (!res.ok) {
+            throw new Error(json.error || `HTTP ${res.status}`);
+          }
+          setData(json);
+        } catch (e) {
+          setError(e.message || "Request failed");
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const results = data?.results || [];
+      const plan = data?.plan || null;
+
+      return (
+        <div className="container">
+          <h1>FinSight – NL Financial Query</h1>
+          <div className="muted" style={{ marginBottom: 12 }}>
+            Ask in natural language; we will run the federated price and fundamentals query.
+          </div>
+
+          <div className="card">
+            <label style={{ fontWeight: 600, display: "block", marginBottom: 8 }}>
+              Natural language query
+            </label>
+            <textarea
+              placeholder="Show companies with 20% price growth in 2017 and ROE > 15"
+              value={nlQuery}
+              onChange={(e) => setNlQuery(e.target.value)}
+              disabled={loading}
+            />
+            <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+              <button onClick={runQuery} disabled={loading}>
+                {loading ? "Running..." : "Run Query"}
+              </button>
+              {loading && <span className="muted">Running query...</span>}
+            </div>
+            {error && <div className="error">{error}</div>}
+          </div>
+
+          {data?.llm_summary && (
+            <div className="card">
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>LLM Summary</div>
+              <div>{data.llm_summary}</div>
+            </div>
+          )}
+
+          <div className="card">
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Results</div>
+            {plan && (
+              <div className="muted" style={{ marginBottom: 6 }}>
+                Date range: {plan.start_date} to {plan.end_date}
+                {plan.symbols ? ` | Symbols: ${plan.symbols.join(", ")}` : ""}
+                {plan.fy ? ` | FY: ${plan.fy}` : ""}
+              </div>
+            )}
+            {!results.length ? (
+              <div className="muted">No companies matched your criteria.</div>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Start Price</th>
+                    <th>End Price</th>
+                    <th>% Growth</th>
+                    <th>ROE</th>
+                    <th>Debt/Equity</th>
+                    <th>P/E</th>
+                    <th>Current Ratio</th>
+                    <th>Market Cap</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {results.map((r) => (
+                    <tr key={r.symbol}>
+                      <td>{r.symbol}</td>
+                      <td>{fmtNum(r.start_price)}</td>
+                      <td>{fmtNum(r.end_price)}</td>
+                      <td>{fmtPct(r.price_growth)}</td>
+                      <td>{fmtNum(r.roe)}</td>
+                      <td>{fmtNum(r.debt_equity_ratio)}</td>
+                      <td>{fmtNum(r.pe_ratio)}</td>
+                      <td>{fmtNum(r.current_ratio)}</td>
+                      <td>{fmtCap(r.market_cap)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    const fmtNum = (v) => (v && Math.abs(v) > 0 ? Number(v).toFixed(2) : "-");
+    const fmtPct = (v) => (v && Math.abs(v) > 0 ? (Number(v) * 100).toFixed(2) + "%" : "-");
+    const fmtCap = (v) => (v && Math.abs(v) > 0 ? "Rs " + Number(v).toLocaleString("en-IN") : "-");
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<App />);
+  </script>
+</body>
+</html>

@@ -1,7 +1,6 @@
-# main_cli.py
+﻿# main_cli.py
 
-from federator import run_federated_query
-from integrator import integrate
+from services import execute_query
 
 
 def format_result_output(results, llm_summary, nl_query):
@@ -34,7 +33,7 @@ def format_result_output(results, llm_summary, nl_query):
         # Only show metrics that have meaningful values
         if r["start_price"] > 0 and r["end_price"] > 0:
             print(
-                f"  Price Change : {r['start_price']:.2f} → {r['end_price']:.2f} "
+                f"  Price Change : {r['start_price']:.2f} -> {r['end_price']:.2f} "
                 f"({r['price_growth']*100:+.2f}%)"
             )
 
@@ -51,7 +50,7 @@ def format_result_output(results, llm_summary, nl_query):
             print(f"  Current Ratio: {r['current_ratio']:.2f}")
 
         if r["market_cap"] > 0:
-            print(f"  Market Cap   : ₹{r['market_cap']:,.0f}")
+            print(f"  Market Cap   : Rs {r['market_cap']:,.0f}")
 
 
 def main():
@@ -74,22 +73,20 @@ def main():
 
         print("\nAnalyzing query and generating SQL...")
         try:
-            plan, df_price, df_fund = run_federated_query(nl_query)
+            plan, results, llm_summary = execute_query(nl_query)
         except Exception as e:
             print(f"\nError executing query: {e}")
             continue
 
         print("Integrating results...")
         try:
-            results, llm_summary = integrate(plan, df_price, df_fund, nl_query)
+            format_result_output(results, llm_summary, nl_query)
         except Exception as e:
             print(f"\nError processing results: {e}")
             import traceback
 
             traceback.print_exc()
             continue
-
-        format_result_output(results, llm_summary, nl_query)
 
 
 if __name__ == "__main__":

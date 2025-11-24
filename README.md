@@ -770,3 +770,18 @@ User Query (Natural Language)
 ---
 
 
+
+## Web UI (Flask + React SPA)
+
+Steps (from repo root):
+1. Start databases: `docker compose -f db/docker-compose.yml up -d`
+2. (Optional) Activate venv: `python -m venv .venv` then `.venv\Scripts\Activate.ps1` (or `source .venv/bin/activate`)
+3. Install deps (Flask included): `pip install -r requirements.txt`
+4. Run the web app: `python src/web_app.py`
+5. Open http://localhost:5000 in your browser.
+
+API endpoints:
+- `POST /api/query` with `{ "nl_query": "..." }` returns `plan`, `results`, and optional `llm_summary`.
+- `GET /api/health` checks DB connectivity and Ollama status.
+
+The CLI in `src/main_cli.py` still works; the web UI is an additional entrypoint served from `web/index.html`.
