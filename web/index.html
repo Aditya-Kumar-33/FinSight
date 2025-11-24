@@ -5,18 +5,169 @@
   <title>FinSight – NL Financial Query</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f5f7fb; color: #1c1c1c; }
-    .container { max-width: 1000px; margin: 0 auto; padding: 24px; }
-    h1 { margin: 0 0 8px; }
-    .card { background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-top: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
-    textarea { width: 100%; min-height: 90px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; resize: vertical; }
-    button { padding: 10px 16px; background: #2563eb; color: white; border: none; border-radius: 6px; cursor: pointer; }
-    button:disabled { background: #93c5fd; cursor: not-allowed; }
-    .error { color: #b91c1c; margin-top: 8px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-    th, td { padding: 10px 8px; border-bottom: 1px solid #e5e7eb; text-align: left; font-size: 14px; }
-    th { background: #f3f4f6; }
-    .muted { color: #6b7280; }
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at top, #111827 0, #020617 45%, #020617 100%);
+      color: #e5e7eb;
+      min-height: 100vh;
+    }
+
+    .page {
+      max-width: 1200px;
+      margin: 32px auto 48px;
+      padding: 0 24px 48px;
+    }
+
+    /* Top FinSight pill */
+    .title-pill {
+      width: 100%;
+      border-radius: 9999px;
+      background: #020617;
+      border: 1px solid #111827;
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.85);
+      padding: 18px 32px;
+      margin-bottom: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .title-pill h1 {
+      margin: 0;
+      font-size: 32px;
+      letter-spacing: 0.04em;
+      font-weight: 700;
+      color: #f9fafb;
+      text-align: center;
+    }
+
+    .muted {
+      color: #9ca3af;
+    }
+
+    .card {
+      background: #020617;
+      border-radius: 24px;
+      border: 1px solid #111827;
+      padding: 24px 24px 20px;
+      margin-top: 18px;
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.85);
+    }
+
+    .card + .card {
+      margin-top: 20px;
+    }
+
+    label {
+      font-weight: 700;
+      font-size: 18px;
+      display: block;
+      margin-bottom: 12px;
+      color: #f9fafb;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 110px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      border: 1px solid #1f2937;
+      background: #020617;
+      color: #e5e7eb;
+      font-size: 15px;
+      resize: vertical;
+      outline: none;
+      box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.7);
+    }
+
+    textarea::placeholder {
+      color: #6b7280;
+    }
+
+    textarea:focus {
+      border-color: #38bdf8;
+      box-shadow: 0 0 0 1px #38bdf8;
+    }
+
+    button {
+      padding: 12px 28px;
+      border-radius: 9999px;
+      border: none;
+      font-size: 15px;
+      font-weight: 600;
+      color: #0b1020;
+      cursor: pointer;
+      background-image: linear-gradient(90deg, #38bdf8, #6366f1, #a855f7);
+      transition: transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      opacity: 0.96;
+    }
+
+    button:active {
+      transform: translateY(0);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.65;
+      box-shadow: none;
+    }
+
+    .error {
+      color: #f87171;
+      margin-top: 10px;
+      font-size: 14px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 14px;
+    }
+
+    th,
+    td {
+      padding: 10px 8px;
+      border-bottom: 1px solid #111827;
+      text-align: left;
+    }
+
+    th {
+      background: #020617;
+      color: #9ca3af;
+      font-weight: 600;
+      border-bottom: 1px solid #1f2937;
+    }
+
+    tbody tr:nth-child(even) {
+      background: rgba(15, 23, 42, 0.5);
+    }
+
+    tbody tr:hover {
+      background: rgba(31, 41, 55, 0.7);
+    }
+
+    .results-meta {
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+
+    .row-actions {
+      margin-top: 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
   </style>
 </head>
 <body>
@@ -67,23 +218,20 @@
       const plan = data?.plan || null;
 
       return (
-        <div className="container">
-          <h1>FinSight – NL Financial Query</h1>
-          <div className="muted" style={{ marginBottom: 12 }}>
-            Ask in natural language; we will run the federated price and fundamentals query.
+        <div className="page">
+          <div className="title-pill">
+            <h1>FinSight</h1>
           </div>
 
           <div className="card">
-            <label style={{ fontWeight: 600, display: "block", marginBottom: 8 }}>
-              Natural language query
-            </label>
+            <label>Get Financial Insight</label>
             <textarea
-              placeholder="Show companies with 20% price growth in 2017 and ROE > 15"
+              placeholder="Show companies with 20% price growth in 2017 and ROE &gt; 15"
               value={nlQuery}
               onChange={(e) => setNlQuery(e.target.value)}
               disabled={loading}
             />
-            <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+            <div className="row-actions">
               <button onClick={runQuery} disabled={loading}>
                 {loading ? "Running..." : "Run Query"}
               </button>
@@ -102,7 +250,7 @@
           <div className="card">
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Results</div>
             {plan && (
-              <div className="muted" style={{ marginBottom: 6 }}>
+              <div className="muted results-meta">
                 Date range: {plan.start_date} to {plan.end_date}
                 {plan.symbols ? ` | Symbols: ${plan.symbols.join(", ")}` : ""}
                 {plan.fy ? ` | FY: ${plan.fy}` : ""}
@@ -147,9 +295,20 @@
       );
     }
 
-    const fmtNum = (v) => (v && Math.abs(v) > 0 ? Number(v).toFixed(2) : "-");
-    const fmtPct = (v) => (v && Math.abs(v) > 0 ? (Number(v) * 100).toFixed(2) + "%" : "-");
-    const fmtCap = (v) => (v && Math.abs(v) > 0 ? "Rs " + Number(v).toLocaleString("en-IN") : "-");
+    const fmtNum = (v) =>
+      v !== null && v !== undefined && Math.abs(Number(v)) > 0
+        ? Number(v).toFixed(2)
+        : "-";
+
+    const fmtPct = (v) =>
+      v !== null && v !== undefined && Math.abs(Number(v)) > 0
+        ? (Number(v) * 100).toFixed(2) + "%"
+        : "-";
+
+    const fmtCap = (v) =>
+      v !== null && v !== undefined && Math.abs(Number(v)) > 0
+        ? "Rs " + Number(v).toLocaleString("en-IN")
+        : "-";
 
     const root = ReactDOM.createRoot(document.getElementById("root"));
     root.render(<App />);
