@@ -1,5 +1,5 @@
 # analyzer.py
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional, List, Tuple
 from dateutil.relativedelta import relativedelta
@@ -33,6 +33,8 @@ class QueryPlan:
     # will be filled by build_sql()
     sql_price: Optional[str] = None
     sql_fund: Optional[str] = None
+    analysis_mode: str = "unknown"  # one of "llm", "hybrid", "fallback", "unknown"
+    warnings: List[str] = field(default_factory=list)
 
 
 # ------------ LLM-based SQL query generator ------------
@@ -312,6 +314,125 @@ def analyze_query_with_llm(nl_query: str) -> QueryPlan:
         return analyze_query_fallback(nl_query)
 
 
+# ------------ hybrid comparison helpers ------------
+
+
+def compare_plans(
+    plan_llm: Optional[QueryPlan], plan_rule: Optional[QueryPlan]
+) -> Tuple[QueryPlan, str, List[str]]:
+    """
+    Compare LLM and rule-based plans and select the best-fit plan with warnings.
+    Returns (chosen_plan, analysis_mode, warnings).
+    """
+    warnings: List[str] = []
+    tolerance = 1e-4
+
+    if plan_llm is None and plan_rule is None:
+        warnings.append("Both analyzers failed; using default rule-based plan.")
+        fallback = analyze_query_fallback("")
+        return fallback, "fallback", warnings
+
+    if plan_llm is None:
+        warnings.append("LLM analyzer failed, using rule-based fallback.")
+        return plan_rule, "fallback", warnings
+
+    if plan_rule is None:
+        warnings.append("Rule-based analyzer failed, using LLM plan.")
+        return plan_llm, "llm", warnings
+
+    score_llm = 0
+    score_rule = 0
+
+    # Symbols comparison
+    if plan_llm.symbols and plan_rule.symbols:
+        if set(plan_llm.symbols) == set(plan_rule.symbols):
+            score_llm += 2
+            score_rule += 2
+        else:
+            warnings.append(
+                "LLM and rule-based analyzers disagree on symbols; keeping both options."
+            )
+    elif plan_llm.symbols and not plan_rule.symbols:
+        score_llm += 1
+    elif plan_rule.symbols and not plan_llm.symbols:
+        score_rule += 1
+
+    # Fiscal year comparison
+    if plan_llm.fy and plan_rule.fy:
+        if plan_llm.fy == plan_rule.fy:
+            score_llm += 2
+            score_rule += 2
+        else:
+            warnings.append(
+                "LLM and rule-based analyzers disagree on fiscal year; favoring more confident plan."
+            )
+    elif plan_llm.fy and not plan_rule.fy:
+        score_llm += 1
+    elif plan_rule.fy and not plan_llm.fy:
+        score_rule += 1
+
+    # Thresholds
+    threshold_fields = [
+        ("min_price_growth", "price growth threshold"),
+        ("max_debt_equity", "debt/equity threshold"),
+        ("min_roe", "ROE threshold"),
+        ("max_pe", "PE threshold"),
+    ]
+    for attr, label in threshold_fields:
+        v_llm = getattr(plan_llm, attr)
+        v_rule = getattr(plan_rule, attr)
+        if v_llm is not None and v_rule is not None:
+            if abs(v_llm - v_rule) <= tolerance:
+                score_llm += 1
+                score_rule += 1
+            else:
+                warnings.append(
+                    f"LLM and rule-based analyzers disagree on {label}; choosing cautiously."
+                )
+        elif v_llm is not None:
+            score_llm += 1
+        elif v_rule is not None:
+            score_rule += 1
+
+    # SQL presence
+    if plan_llm.sql_price and plan_llm.sql_fund:
+        score_llm += 1
+    if plan_rule.sql_price and plan_rule.sql_fund:
+        score_rule += 1
+
+    # Decide mode
+    if score_llm >= score_rule + 2:
+        return plan_llm, "llm", warnings
+    if score_rule >= score_llm + 2:
+        return plan_rule, "fallback", warnings
+
+    # Hybrid: start from LLM plan, patch missing pieces from rule plan
+    hybrid = plan_llm
+    if hybrid.symbols is None and plan_rule.symbols:
+        hybrid.symbols = plan_rule.symbols
+        warnings.append("LLM provided no symbols; symbols taken from rule-based analyzer.")
+    if hybrid.fy is None and plan_rule.fy is not None:
+        hybrid.fy = plan_rule.fy
+        warnings.append("LLM provided no fiscal year; fy taken from rule-based analyzer.")
+
+    for attr, label in threshold_fields:
+        if getattr(hybrid, attr) is None and getattr(plan_rule, attr) is not None:
+            setattr(hybrid, attr, getattr(plan_rule, attr))
+            warnings.append(
+                f"LLM missed {label}; value taken from rule-based analyzer."
+            )
+
+    if (not hybrid.sql_price or not hybrid.sql_fund) and plan_rule.sql_price and plan_rule.sql_fund:
+        if not hybrid.sql_price:
+            hybrid.sql_price = plan_rule.sql_price
+        if not hybrid.sql_fund:
+            hybrid.sql_fund = plan_rule.sql_fund
+        warnings.append("LLM output lacked SQL; using rule-based SQL for missing parts.")
+
+    warnings.append("LLM and rule-based analyzers combined into a hybrid plan.")
+    return hybrid, "hybrid", warnings
+
+
 # ------------ fallback regex-based helpers ------------
 
 
@@ -455,19 +576,33 @@ def build_sql(plan: QueryPlan) -> QueryPlan:
 def analyze_and_decompose(nl_query: str) -> QueryPlan:
     """
     High-level entry point used by federator:
-      1) Try to use LLM to analyze NL query and generate SQL directly
-      2) If LLM fails or is unavailable, use fallback regex parser
-      3) If SQL not generated by LLM, build SQL manually using build_sql()
-
-    The flow is:
-      - analyze_query_with_llm() tries LLM first (generates SQL + parameters)
-      - If LLM succeeds, plan.sql_price and plan.sql_fund are already set
-      - If LLM fails, analyze_query_fallback() extracts parameters only
-      - build_sql() checks if SQL already exists, generates manually if not
+      1) Run both LLM-based and rule-based analyzers
+      2) Compare plans and choose the best (llm / fallback / hybrid)
+      3) If SQL not generated by chosen plan, build SQL manually using build_sql()
     """
-    plan = analyze_query(nl_query)
-    plan = build_sql(plan)
-    return plan
+    plan_llm: Optional[QueryPlan] = None
+    plan_rule: Optional[QueryPlan] = None
+    pre_warnings: List[str] = []
+
+    try:
+        plan_llm = analyze_query_with_llm(nl_query)
+    except Exception as e:
+        pre_warnings.append(f"LLM analyzer raised an error: {e}")
+
+    try:
+        plan_rule = analyze_query_fallback(nl_query)
+    except Exception as e:
+        pre_warnings.append(f"Rule-based analyzer raised an error: {e}")
+
+    chosen, mode, warnings = compare_plans(plan_llm, plan_rule)
+    chosen.analysis_mode = mode
+    chosen.warnings.extend(pre_warnings)
+    chosen.warnings.extend(warnings)
+
+    if not chosen.sql_price or not chosen.sql_fund:
+        chosen = build_sql(chosen)
+
+    return chosen
 
 
 if __name__ == "__main__":

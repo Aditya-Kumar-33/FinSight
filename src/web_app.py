@@ -5,6 +5,7 @@ from flask import Flask, request, jsonify, send_from_directory
 from services import execute_query
 from llm_client import check_ollama_status
 from db_utils import query_price_db, query_fund_db
+import math
 
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR.parent / "web"
@@ -52,15 +53,26 @@ def api_query():
     except Exception as e:
         return jsonify({"error": f"Query failed: {e}"}), 500
 
+    def safe_number(value):
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(num):
+            return None
+        return num
+
     plan_summary = {
-        "start_date": str(plan.start_date),
-        "end_date": str(plan.end_date),
+        "start_date": plan.start_date.isoformat() if plan.start_date else None,
+        "end_date": plan.end_date.isoformat() if plan.end_date else None,
         "symbols": plan.symbols,
         "fy": plan.fy,
-        "min_price_growth": plan.min_price_growth,
-        "max_debt_equity": plan.max_debt_equity,
-        "min_roe": plan.min_roe,
-        "max_pe": plan.max_pe,
+        "min_price_growth": safe_number(plan.min_price_growth),
+        "max_debt_equity": safe_number(plan.max_debt_equity),
+        "min_roe": safe_number(plan.min_roe),
+        "max_pe": safe_number(plan.max_pe),
+        "analysis_mode": getattr(plan, "analysis_mode", "unknown"),
+        "warnings": getattr(plan, "warnings", []),
     }
 
     return jsonify(
