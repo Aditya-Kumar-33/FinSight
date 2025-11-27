@@ -63,7 +63,9 @@ def api_query():
         "max_pe": plan.max_pe,
     }
 
-    return jsonify({"results": results, "llm_summary": llm_summary, "plan": plan_summary})
+    return jsonify(
+        {"results": results, "llm_summary": llm_summary, "plan": plan_summary}
+    )
 
 
 @app.route("/", methods=["GET"])

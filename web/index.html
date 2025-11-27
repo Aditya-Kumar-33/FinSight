@@ -147,9 +147,9 @@
       );
     }
 
-    const fmtNum = (v) => (v && Math.abs(v) > 0 ? Number(v).toFixed(2) : "-");
-    const fmtPct = (v) => (v && Math.abs(v) > 0 ? (Number(v) * 100).toFixed(2) + "%" : "-");
-    const fmtCap = (v) => (v && Math.abs(v) > 0 ? "Rs " + Number(v).toLocaleString("en-IN") : "-");
+    const fmtNum = (v) => (v != null && !isNaN(v) && Math.abs(v) > 0 ? Number(v).toFixed(2) : "-");
+    const fmtPct = (v) => (v != null && !isNaN(v) && Math.abs(v) > 0 ? (Number(v) * 100).toFixed(2) + "%" : "-");
+    const fmtCap = (v) => (v != null && !isNaN(v) && Math.abs(v) > 0 ? "Rs " + Number(v).toLocaleString("en-IN") : "-");
 
     const root = ReactDOM.createRoot(document.getElementById("root"));
     root.render(<App />);

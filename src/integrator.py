@@ -2,9 +2,22 @@
 
 from typing import List, Dict, Any, Optional
 import pandas as pd
+import math
 
 from analyzer import QueryPlan
 from llm_client import call_ollama, check_ollama_status
+
+
+def safe_float(value: Any) -> Optional[float]:
+    """
+    Convert a value to float, returning None for NaN values.
+    This ensures proper JSON serialization.
+    """
+    try:
+        f = float(value)
+        return None if math.isnan(f) else f
+    except (ValueError, TypeError):
+        return None
 
 
 def generate_result_summary(
@@ -121,14 +134,14 @@ def integrate(
         results.append(
             {
                 "symbol": symbol,
-                "price_growth": float(row.get("price_growth", 0.0)),
-                "start_price": float(row.get("start_price", 0.0)),
-                "end_price": float(row.get("end_price", 0.0)),
-                "roe": float(row.get("roe", 0.0)),
-                "debt_equity_ratio": float(row.get("debt_equity_ratio", 0.0)),
-                "pe_ratio": float(row.get("pe_ratio", 0.0)),
-                "current_ratio": float(row.get("current_ratio", 0.0)),
-                "market_cap": float(row.get("market_cap", 0.0)),
+                "price_growth": safe_float(row.get("price_growth", 0.0)),
+                "start_price": safe_float(row.get("start_price", 0.0)),
+                "end_price": safe_float(row.get("end_price", 0.0)),
+                "roe": safe_float(row.get("roe", 0.0)),
+                "debt_equity_ratio": safe_float(row.get("debt_equity_ratio", 0.0)),
+                "pe_ratio": safe_float(row.get("pe_ratio", 0.0)),
+                "current_ratio": safe_float(row.get("current_ratio", 0.0)),
+                "market_cap": safe_float(row.get("market_cap", 0.0)),
             }
         )
 
